@@ -9,11 +9,15 @@ st.set_page_config(
     layout="wide",
 )
 
-# 1. API key loaded securely behind the scenes (never displayed in UI)
+# Fetch API key silently from Secrets (never exposed in UI)
 def get_secret_api_key() -> str:
-    if "GEMINI_API_KEY" in st.secrets:
-        return st.secrets["GEMINI_API_KEY"]
-    return os.getenv("GEMINI_API_KEY", "")
+    try:
+        key = st.secrets.get("GEMINI_API_KEY", "") or st.secrets.get("gemini_api_key", "")
+        if key:
+            return key.strip()
+    except Exception:
+        pass
+    return os.getenv("GEMINI_API_KEY", "").strip()
 
 
 def extract_text(uploaded_file) -> str:
@@ -27,59 +31,14 @@ def extract_text(uploaded_file) -> str:
     return ""
 
 
-def generate_summary(text: str, style: str, length: str, model_name: str, custom_instruction: str = "") -> str:
-    api_key = get_secret_api_key()
-    if not api_key:
-        return "Error: `GEMINI_API_KEY` was not found in Streamlit Secrets. Please add it to your App Settings > Secrets."
-
-    style_prompts = {
-        "Key Bullet Points": "Summarize with concise, high-impact bullet points focusing on key takeaways.",
-        "Executive Summary": "Write a formal executive summary with an overview, core findings, and action items.",
-        "Concise Paragraph": "Summarize into 1 to 2 clear, punchy paragraphs.",
-        "Detailed & Structured": "Provide a comprehensive breakdown with structured markdown headings.",
-        "TL;DR": "Provide a 2 to 3 sentence TL;DR capturing the essential message.",
-    }
-
-    prompt = (
-        f"You are an expert analyst.\n"
-        f"Style: {style_prompts.get(style, '')}\n"
-        f"Target Length: {length}\n"
-        f"{f'Additional instruction: {custom_instruction}' if custom_instruction else ''}\n\n"
-        f"Text to summarize:\n{text}"
-    )
-
-    # Automatically try chosen model, then fallback if endpoint reports not found
-    candidate_models = [model_name]
-    fallback_models = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-4-argon"]
-    for m in fallback_models:
-        if m not in candidate_models:
-            candidate_models.append(m)
-
-    client = genai.Client(api_key=api_key)
-    last_error = ""
-
-    for target_model in candidate_models:
-        try:
-            response = client.models.generate_content(
-                model=target_model,
-                contents=prompt,
-            )
-            if response.text:
-                return response.text
-        except Exception as exc:
-            last_error = str(exc)
-            continue
-
-    return f"Unable to generate summary: {last_error}"
-
-
-# Sidebar Settings (API Key input completely removed)
+# Sidebar Settings
 with st.sidebar:
     st.header("⚙️ Settings")
     model_choice = st.selectbox(
         "Model",
-        options=["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-4-argon"],
+        options=["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"],
         index=0,
+        help="Fast, low-latency models for instant text generation.",
     )
     summary_style = st.selectbox(
         "Summary Style",
@@ -87,7 +46,7 @@ with st.sidebar:
         index=0,
     )
     summary_length = st.select_slider("Target Length", options=["Short", "Medium", "Long"], value="Medium")
-    custom_notes = st.text_area("Custom Instructions (Optional)", placeholder="e.g. Focus on financial figures...")
+    custom_notes = st.text_area("Custom Instructions (Optional)", placeholder="e.g. Focus on financial metrics...")
 
 # Main UI
 st.title("📝 AI Document & Text Summarizer")
@@ -115,22 +74,54 @@ if clear:
     st.rerun()
 
 if submit:
-    if not source_text.strip():
-        st.warning("Please paste text or upload a document first.")
+    api_key = get_secret_api_key()
+
+    if not api_key:
+        st.error("Missing `GEMINI_API_KEY` in Streamlit Secrets. Please add it to App Settings > Secrets.")
+    elif not source_text.strip():
+        st.warning("Please paste some text or upload a document first.")
     else:
-        with st.spinner("Generating summary..."):
-            result = generate_summary(
-                text=source_text,
-                style=summary_style,
-                length=summary_length,
-                model_name=model_choice,
-                custom_instruction=custom_notes,
-            )
-            st.session_state["summary"] = result
+        style_prompts = {
+            "Key Bullet Points": "Summarize with concise, high-impact bullet points focusing on key takeaways.",
+            "Executive Summary": "Write a formal executive summary with an overview, core findings, and action items.",
+            "Concise Paragraph": "Summarize into 1 to 2 clear, punchy paragraphs.",
+            "Detailed & Structured": "Provide a comprehensive breakdown with structured markdown headings.",
+            "TL;DR": "Provide a 2 to 3 sentence TL;DR capturing the essential message.",
+        }
+
+        prompt = (
+            f"You are an expert analyst.\n"
+            f"Style: {style_prompts.get(summary_style, '')}\n"
+            f"Target Length: {summary_length}\n"
+            f"{f'Additional instruction: {custom_notes}' if custom_notes else ''}\n\n"
+            f"Text to summarize:\n{source_text}"
+        )
+
+        st.markdown("### 📋 Generated Summary")
+        output_placeholder = st.empty()
+
+        try:
+            client = genai.Client(api_key=api_key)
+
+            # Generator for real-time text streaming
+            def generate_stream():
+                response = client.models.generate_content_stream(
+                    model=model_choice,
+                    contents=prompt,
+                )
+                for chunk in response:
+                    if chunk.text:
+                        yield chunk.text
+
+            # Stream words directly onto the page
+            with output_placeholder.container():
+                full_summary = st.write_stream(generate_stream())
+                st.session_state["summary"] = full_summary
+
+        except Exception as exc:
+            st.error(f"Error generating summary: {exc}")
 
 if st.session_state.get("summary"):
-    st.markdown("### 📋 Generated Summary")
-    st.markdown(st.session_state["summary"])
     st.download_button(
         label="📥 Download Summary (.md)",
         data=st.session_state["summary"],
