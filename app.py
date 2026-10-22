@@ -50,7 +50,7 @@ def generate_summary(text: str, style: str, length: str, model_name: str, custom
 
     # Automatically try chosen model, then fallback if endpoint reports not found
     candidate_models = [model_name]
-    fallback_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
+    fallback_models = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-4-argon"]
     for m in fallback_models:
         if m not in candidate_models:
             candidate_models.append(m)
@@ -78,7 +78,7 @@ with st.sidebar:
     st.header("⚙️ Settings")
     model_choice = st.selectbox(
         "Model",
-        options=["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"],
+        options=["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-4-argon"],
         index=0,
     )
     summary_style = st.selectbox(
